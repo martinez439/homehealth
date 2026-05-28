@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { apiDelete, apiGet, apiPost, apiPut } from '../../api/client';
 import { Card, DataTable, PageHeader, StatusPill } from '../../components/UI';
 import Modal from '../../components/ui/Modal';
@@ -24,7 +25,7 @@ export default function AdminClientsPage() {
       c.last_name || '-',
       c.phone || '-',
       <StatusPill status={{ className: c.status === 'active' ? 'completed' : 'scheduled', text: c.status }} />,
-      <div className='actions'><button className='btn' onClick={() => { setForm(c); setEditId(c.id); }}>Edit</button><button className='btn' onClick={() => remove(c.id)}>Delete</button></div>,
+      <div className='actions'><Link className='btn subtle' to={`/admin/clients/${c.id}/family`}>Family Portal</Link><Link className='btn subtle' to={`/family/${c.id}`}>Public View</Link><button className='btn' onClick={() => { setForm(c); setEditId(c.id); }}>Edit</button><button className='btn' onClick={() => remove(c.id)}>Delete</button></div>,
     ],
   }));
 

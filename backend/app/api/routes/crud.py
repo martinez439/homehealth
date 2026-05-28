@@ -2,16 +2,18 @@ from datetime import date, datetime, time
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.models.models import Caregiver, Client, IntakeRequest, Visit
+from app.models.models import Caregiver, Client, FamilyContact, FamilyMessage, IntakeRequest, Visit
 from app.schemas.schemas import (
     CaregiverCreate,
     CaregiverUpdate,
     ClientCreate,
     ClientUpdate,
+    FamilyContactCreate,
+    FamilyContactUpdate,
+    FamilyMessageCreate,
     IntakeCreate,
     IntakeUpdate,
     VisitCreate,
@@ -298,3 +300,213 @@ def missed_checkins(caregiver_id: int | None = Query(default=None), db: Session 
         query = query.filter(Visit.caregiver_id == caregiver_id)
     visits = query.all()
     return {"count": len(visits), "visits": [_visit_payload(db, v) for v in visits]}
+
+
+def _ensure_client(db: Session, client_id: int) -> Client:
+    return get_or_404(db, Client, client_id)
+
+
+def _family_client_payload(db: Session, client: Client):
+    latest_visit = db.query(Visit).filter(Visit.client_id == client.id).order_by(Visit.updated_at.desc()).first()
+    latest_message = db.query(FamilyMessage).filter(FamilyMessage.client_id == client.id).order_by(FamilyMessage.updated_at.desc()).first()
+    latest_contact = db.query(FamilyContact).filter(FamilyContact.client_id == client.id).order_by(FamilyContact.updated_at.desc()).first()
+    timestamps = [client.updated_at]
+    if latest_visit:
+        timestamps.append(latest_visit.updated_at)
+    if latest_message:
+        timestamps.append(latest_message.updated_at)
+    if latest_contact:
+        timestamps.append(latest_contact.updated_at)
+    last_updated = max(timestamps)
+    return {
+        "id": client.id,
+        "first_name": client.first_name,
+        "last_name": client.last_name,
+        "full_name": f"{client.first_name} {client.last_name}",
+        "care_level": client.care_level,
+        "status": client.status,
+        "address": client.address,
+        "city": client.city,
+        "state": client.state,
+        "last_updated": last_updated.isoformat(),
+    }
+
+
+@router.get('/family/client/{client_id}')
+def family_client(client_id: int, db: Session = Depends(get_db)):
+    client = _ensure_client(db, client_id)
+    return _family_client_payload(db, client)
+
+
+@router.get('/family/client/{client_id}/visits/upcoming')
+def family_upcoming_visits(client_id: int, db: Session = Depends(get_db)):
+    _ensure_client(db, client_id)
+    visits = (
+        db.query(Visit)
+        .filter(Visit.client_id == client_id, Visit.status.in_(['scheduled', 'in_progress']))
+        .order_by(Visit.scheduled_start.asc())
+        .limit(10)
+        .all()
+    )
+    return [_visit_payload(db, visit) for visit in visits]
+
+
+@router.get('/family/client/{client_id}/visits/completed')
+def family_completed_visits(client_id: int, db: Session = Depends(get_db)):
+    _ensure_client(db, client_id)
+    visits = (
+        db.query(Visit)
+        .filter(Visit.client_id == client_id, Visit.status == 'completed')
+        .order_by(Visit.scheduled_start.desc())
+        .limit(10)
+        .all()
+    )
+    return [_visit_payload(db, visit) for visit in visits]
+
+
+@router.get('/family/client/{client_id}/notes')
+def family_notes(client_id: int, db: Session = Depends(get_db)):
+    _ensure_client(db, client_id)
+    visits = (
+        db.query(Visit)
+        .filter(Visit.client_id == client_id, Visit.caregiver_notes != '')
+        .order_by(Visit.updated_at.desc())
+        .limit(20)
+        .all()
+    )
+    notes = []
+    for visit in visits:
+        caregiver = db.get(Caregiver, visit.caregiver_id)
+        notes.append({
+            "id": visit.id,
+            "visit_id": visit.id,
+            "caregiver_name": f"{caregiver.first_name} {caregiver.last_name}" if caregiver else "Care team",
+            "note": visit.caregiver_notes,
+            "service_type": visit.service_type,
+            "timestamp": (visit.checked_out_at or visit.updated_at).isoformat(),
+        })
+    return notes
+
+
+@router.get('/family/client/{client_id}/contacts')
+def family_contacts(client_id: int, db: Session = Depends(get_db)):
+    _ensure_client(db, client_id)
+    return db.query(FamilyContact).filter(FamilyContact.client_id == client_id).order_by(FamilyContact.is_primary.desc(), FamilyContact.last_name.asc()).all()
+
+
+@router.post('/family/client/{client_id}/contacts')
+def create_family_contact(client_id: int, payload: FamilyContactCreate, db: Session = Depends(get_db)):
+    _ensure_client(db, client_id)
+    contact = FamilyContact(client_id=client_id, **payload.model_dump())
+    if contact.is_primary:
+        db.query(FamilyContact).filter(FamilyContact.client_id == client_id).update({FamilyContact.is_primary: False})
+    db.add(contact); db.commit(); db.refresh(contact)
+    return contact
+
+
+@router.put('/family/contacts/{contact_id}')
+def update_family_contact(contact_id: int, payload: FamilyContactUpdate, db: Session = Depends(get_db)):
+    contact = get_or_404(db, FamilyContact, contact_id)
+    data = payload.model_dump()
+    if data.get('is_primary'):
+        db.query(FamilyContact).filter(FamilyContact.client_id == contact.client_id, FamilyContact.id != contact.id).update({FamilyContact.is_primary: False})
+    for key, value in data.items():
+        setattr(contact, key, value)
+    db.commit(); db.refresh(contact)
+    return contact
+
+
+@router.delete('/family/contacts/{contact_id}')
+def delete_family_contact(contact_id: int, db: Session = Depends(get_db)):
+    contact = get_or_404(db, FamilyContact, contact_id)
+    db.delete(contact); db.commit()
+    return {"ok": True}
+
+
+@router.get('/family/client/{client_id}/messages')
+def family_messages(client_id: int, db: Session = Depends(get_db)):
+    _ensure_client(db, client_id)
+    return db.query(FamilyMessage).filter(FamilyMessage.client_id == client_id).order_by(FamilyMessage.created_at.desc()).all()
+
+
+@router.post('/family/client/{client_id}/messages')
+def create_family_message(client_id: int, payload: FamilyMessageCreate, db: Session = Depends(get_db)):
+    _ensure_client(db, client_id)
+    message = FamilyMessage(client_id=client_id, status='new', **payload.model_dump())
+    db.add(message); db.commit(); db.refresh(message)
+    return message
+
+
+def _timeline_item(item_id: str, item_type: str, title: str, description: str, timestamp: datetime):
+    return {
+        "id": item_id,
+        "type": item_type,
+        "title": title,
+        "description": description,
+        "timestamp": timestamp.isoformat(),
+    }
+
+
+@router.get('/family/client/{client_id}/timeline')
+def family_timeline(client_id: int, db: Session = Depends(get_db)):
+    _ensure_client(db, client_id)
+    items = []
+    visits = db.query(Visit).filter(Visit.client_id == client_id).order_by(Visit.updated_at.desc()).limit(20).all()
+    for visit in visits:
+        caregiver = db.get(Caregiver, visit.caregiver_id)
+        caregiver_name = f"{caregiver.first_name} {caregiver.last_name}" if caregiver else "Care team"
+        if visit.status == 'completed':
+            items.append(_timeline_item(
+                f"visit-{visit.id}",
+                "completed_visit",
+                "Visit completed",
+                f"{caregiver_name} completed {visit.service_type or 'a care visit'}.",
+                visit.checked_out_at or visit.updated_at,
+            ))
+        if visit.checked_in_at:
+            items.append(_timeline_item(
+                f"check-in-{visit.id}",
+                "check_in",
+                "Caregiver checked in",
+                f"{caregiver_name} arrived for {visit.service_type or 'care'}.",
+                visit.checked_in_at,
+            ))
+        if visit.checked_out_at:
+            items.append(_timeline_item(
+                f"check-out-{visit.id}",
+                "check_out",
+                "Caregiver checked out",
+                f"{caregiver_name} finished the visit.",
+                visit.checked_out_at,
+            ))
+        if visit.caregiver_notes:
+            items.append(_timeline_item(
+                f"note-{visit.id}",
+                "care_note",
+                "Care note added",
+                visit.caregiver_notes,
+                visit.updated_at,
+            ))
+
+    messages = db.query(FamilyMessage).filter(FamilyMessage.client_id == client_id).order_by(FamilyMessage.created_at.desc()).limit(10).all()
+    for message in messages:
+        items.append(_timeline_item(
+            f"message-{message.id}",
+            "family_message",
+            "Family message received",
+            f"{message.sender_name}: {message.subject}",
+            message.created_at,
+        ))
+
+    contacts = db.query(FamilyContact).filter(FamilyContact.client_id == client_id).order_by(FamilyContact.updated_at.desc()).limit(5).all()
+    for contact in contacts:
+        items.append(_timeline_item(
+            f"contact-{contact.id}",
+            "contact_update",
+            "Family contact updated",
+            f"{contact.first_name} {contact.last_name} is listed as {contact.relationship or 'a family contact'}.",
+            contact.updated_at,
+        ))
+
+    items.sort(key=lambda item: item["timestamp"], reverse=True)
+    return items[:25]

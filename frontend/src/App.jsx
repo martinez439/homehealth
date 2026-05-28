@@ -17,6 +17,7 @@ export default function App() {
         <Route path="/intake" element={<IntakePage />} />
         <Route path="/admin" element={<AdminDashboardPage />} />
         <Route path="/admin/clients" element={<AdminClientsPage />} />
+        <Route path="/admin/clients/:clientId/family" element={<FamilyViewPage />} />
         <Route path="/admin/caregivers" element={<AdminCaregiversPage />} />
         <Route path="/admin/schedule" element={<AdminSchedulePage />} />
         <Route path="/caregiver" element={<CaregiverPage />} />
