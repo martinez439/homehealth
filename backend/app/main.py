@@ -1,4 +1,6 @@
 import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import OperationalError
@@ -11,22 +13,22 @@ logger = logging.getLogger(__name__)
 
 
 def _handle_sqlite_schema_mismatch(error: Exception) -> None:
-    logger.warning(
-        "SQLite schema mismatch detected. Please run:\npython reset_db.py\n"
-        "Then restart: uvicorn app.main:app --reload --port 8000"
-    )
     logger.debug("Startup database error", exc_info=error)
-    raise SystemExit(1)
+    raise RuntimeError(
+        "SQLite schema mismatch detected. Please run:\n"
+        "python reset_db.py\n"
+        "Then restart: python -m uvicorn app.main:app --reload --port 8000"
+    ) from error
 
 
 def initialize_database():
     """
     Create schema on startup and seed demo data when needed.
-    In local SQLite development, fail gracefully on schema drift so devs can
-    run the reset utility manually without Windows file-lock crashes.
+    In local SQLite development, fail clearly on schema drift so developers can
+    run the reset utility manually without startup reset side effects.
     """
-    Base.metadata.create_all(bind=engine)
     try:
+        Base.metadata.create_all(bind=engine)
         seed_demo_data()
     except OperationalError as exc:
         if is_dev_mode() and is_sqlite_url(DATABASE_URL):
@@ -34,12 +36,15 @@ def initialize_database():
         raise
 
 
-app = FastAPI(title='Home Health MVP API')
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    initialize_database()
+    yield
+
+
+app = FastAPI(title='Home Health MVP API', lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 app.include_router(api_router, prefix='/api')
-
-
-initialize_database()
 
 
 @app.get('/api/health')
