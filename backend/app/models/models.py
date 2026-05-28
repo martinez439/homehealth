@@ -13,6 +13,53 @@ class TimestampMixin:
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+
+
+class User(TimestampMixin, Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    first_name: Mapped[str] = mapped_column(String(100))
+    last_name: Mapped[str] = mapped_column(String(100))
+    role: Mapped[str] = mapped_column(String(40), default="admin", index=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=True)
+    caregiver_id: Mapped[int] = mapped_column(ForeignKey("caregivers.id"), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=True)
+    actor_email: Mapped[str] = mapped_column(String(255), nullable=True)
+    actor_role: Mapped[str] = mapped_column(String(40), nullable=True)
+    action: Mapped[str] = mapped_column(String(120), index=True)
+    entity_type: Mapped[str] = mapped_column(String(120), index=True)
+    entity_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    ip_address: Mapped[str] = mapped_column(String(120), nullable=True)
+    user_agent: Mapped[str] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class FileAttachment(TimestampMixin, Base):
+    __tablename__ = "file_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner_type: Mapped[str] = mapped_column(String(80), default="admin")
+    owner_id: Mapped[int] = mapped_column(Integer, nullable=True)
+    uploaded_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=True)
+    original_filename: Mapped[str] = mapped_column(String(255))
+    stored_filename: Mapped[str] = mapped_column(String(255), unique=True)
+    content_type: Mapped[str] = mapped_column(String(120), default="application/octet-stream")
+    file_size: Mapped[int] = mapped_column(Integer, default=0)
+    storage_path: Mapped[str] = mapped_column(String(500))
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class Client(TimestampMixin, Base):
     __tablename__ = "clients"
 

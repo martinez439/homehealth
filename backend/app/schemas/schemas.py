@@ -225,3 +225,75 @@ class FamilyMessageRead(FamilyMessageBase):
 
     class Config:
         from_attributes = True
+
+UserRole = Literal["admin", "caregiver", "family"]
+
+
+class UserRegister(BaseModel):
+    email: str
+    password: str
+    first_name: str
+    last_name: str
+    role: UserRole = "family"
+    client_id: int | None = None
+    caregiver_id: int | None = None
+
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+
+class UserRead(BaseModel):
+    id: int
+    email: str
+    first_name: str
+    last_name: str
+    role: UserRole
+    client_id: int | None = None
+    caregiver_id: int | None = None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserRead
+
+
+class AuditLogRead(BaseModel):
+    id: int
+    user_id: int | None = None
+    actor_email: str | None = None
+    actor_role: str | None = None
+    action: str
+    entity_type: str
+    entity_id: int | None = None
+    description: str
+    ip_address: str | None = None
+    user_agent: str | None = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class FileAttachmentRead(BaseModel):
+    id: int
+    owner_type: str
+    owner_id: int | None = None
+    uploaded_by_user_id: int | None = None
+    original_filename: str
+    content_type: str
+    file_size: int
+    is_deleted: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True

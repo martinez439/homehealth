@@ -131,6 +131,9 @@ def seed_demo_data() -> None:
                 ))
             db.add_all(messages)
 
+        from app.api.routes.auth_routes import seed_demo_users
+        seed_demo_users(db)
+
         db.commit()
     finally:
         db.close()

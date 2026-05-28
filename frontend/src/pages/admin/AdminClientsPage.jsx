@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { apiDelete, apiGet, apiPost, apiPut } from '../../api/client';
 import { Card, DataTable, PageHeader, StatusPill } from '../../components/UI';
 import Modal from '../../components/ui/Modal';
+import FileUpload from '../../components/FileUpload';
 
 const initial = { first_name: '', last_name: '', phone: '', care_level: '', status: 'active', city: '', state: '' };
 
@@ -32,6 +33,7 @@ export default function AdminClientsPage() {
   return <>
     <PageHeader title="Client Database" subtitle="People-first records with quick care actions." />
     <div className='section-actions'><button className='btn' onClick={() => { setForm(initial); setCreateOpen(true); }}>Create New Client</button></div>
+    <Card title='Secure file foundation'><FileUpload ownerType='admin' /></Card>
     {error && <Card>{error}</Card>}
 
     {editId && <Card title='Edit Client'>
