@@ -1,11 +1,12 @@
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 import json
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.models.models import Caregiver, Client, FamilyContact, FamilyMessage, IntakeRequest, Visit
+from app.models.models import Caregiver, CaregiverAvailability, Client, FamilyContact, FamilyMessage, IntakeRequest, Visit
 from app.schemas.schemas import (
     CaregiverCreate,
     CaregiverUpdate,
@@ -17,7 +18,11 @@ from app.schemas.schemas import (
     IntakeCreate,
     IntakeUpdate,
     VisitCreate,
+    VisitMove,
     VisitUpdate,
+    RecurringVisitCreate,
+    CaregiverAvailabilityCreate,
+    CaregiverAvailabilityUpdate,
 )
 
 router = APIRouter()
@@ -28,6 +33,148 @@ def get_or_404(db: Session, model, obj_id: int):
     if not obj:
         raise HTTPException(status_code=404, detail=f"{model.__name__} not found")
     return obj
+
+
+def _client_name(db: Session, client_id: int) -> str:
+    client = db.get(Client, client_id)
+    return f"{client.first_name} {client.last_name}" if client else "Unknown Client"
+
+
+def _caregiver_name(db: Session, caregiver_id: int) -> str:
+    caregiver = db.get(Caregiver, caregiver_id)
+    return f"{caregiver.first_name} {caregiver.last_name}" if caregiver else "Unassigned Caregiver"
+
+
+def _calendar_visit_payload(db: Session, visit: Visit, conflicts: list[dict] | None = None):
+    visit_conflicts = [c for c in (conflicts or []) if visit.id in c.get("visit_ids", [])]
+    return {
+        "id": visit.id,
+        "client_id": visit.client_id,
+        "caregiver_id": visit.caregiver_id,
+        "client_name": _client_name(db, visit.client_id),
+        "caregiver_name": _caregiver_name(db, visit.caregiver_id),
+        "scheduled_start": visit.scheduled_start.isoformat(),
+        "scheduled_end": visit.scheduled_end.isoformat(),
+        "status": visit.status,
+        "service_type": visit.service_type,
+        "notes": visit.notes,
+        "recurrence_group_id": visit.recurrence_group_id,
+        "recurrence_rule": visit.recurrence_rule,
+        "recurrence_end_date": visit.recurrence_end_date.isoformat() if visit.recurrence_end_date else None,
+        "generated_from_recurring": visit.generated_from_recurring,
+        "has_conflict": bool(visit_conflicts),
+        "conflicts": visit_conflicts,
+    }
+
+
+def _overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> bool:
+    return a_start < b_end and b_start < a_end
+
+
+def _availability_conflict(db: Session, visit: Visit):
+    availability = (
+        db.query(CaregiverAvailability)
+        .filter(
+            CaregiverAvailability.caregiver_id == visit.caregiver_id,
+            CaregiverAvailability.day_of_week == visit.scheduled_start.weekday(),
+        )
+        .first()
+    )
+    if not availability:
+        return {
+            "type": "outside_availability",
+            "severity": "warning",
+            "visit_ids": [visit.id],
+            "message": f"{_caregiver_name(db, visit.caregiver_id)} has no availability configured for this day.",
+        }
+    if not availability.available:
+        return {
+            "type": "outside_availability",
+            "severity": "severe",
+            "visit_ids": [visit.id],
+            "message": f"{_caregiver_name(db, visit.caregiver_id)} is marked unavailable for this day.",
+        }
+    if availability.start_time and availability.end_time:
+        start_t = visit.scheduled_start.time()
+        end_t = visit.scheduled_end.time()
+        if start_t < availability.start_time or end_t > availability.end_time:
+            return {
+                "type": "outside_availability",
+                "severity": "severe",
+                "visit_ids": [visit.id],
+                "message": f"Visit for {_client_name(db, visit.client_id)} falls outside {_caregiver_name(db, visit.caregiver_id)}'s availability window.",
+            }
+    return None
+
+
+def _detect_conflicts(db: Session, start: datetime | None = None, end: datetime | None = None, visit: Visit | None = None):
+    query = db.query(Visit)
+    if visit:
+        visits = [visit]
+    else:
+        if start:
+            query = query.filter(Visit.scheduled_end >= start)
+        if end:
+            query = query.filter(Visit.scheduled_start <= end)
+        visits = query.order_by(Visit.scheduled_start.asc()).all()
+
+    conflicts = []
+    seen_pairs = set()
+    all_for_overlap = db.query(Visit).order_by(Visit.scheduled_start.asc()).all() if visit else visits
+    for current in visits:
+        if current.scheduled_end <= current.scheduled_start:
+            conflicts.append({
+                "type": "invalid_time",
+                "severity": "severe",
+                "visit_ids": [current.id],
+                "message": f"Visit #{current.id} ends before it starts.",
+            })
+        availability = _availability_conflict(db, current)
+        if availability:
+            conflicts.append(availability)
+        overlaps = [candidate for candidate in all_for_overlap if candidate.id != current.id and candidate.caregiver_id == current.caregiver_id and _overlaps(current.scheduled_start, current.scheduled_end, candidate.scheduled_start, candidate.scheduled_end)]
+        for other in overlaps:
+            pair = tuple(sorted([current.id, other.id]))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            conflicts.append({
+                "type": "double_booking",
+                "severity": "severe",
+                "visit_ids": list(pair),
+                "message": f"{_caregiver_name(db, current.caregiver_id)} is double-booked for visits #{pair[0]} and #{pair[1]}.",
+            })
+    return conflicts
+
+
+def _assert_no_severe_conflicts(db: Session, visit: Visit):
+    conflicts = _detect_conflicts(db, visit=visit)
+    severe = [c for c in conflicts if c["severity"] == "severe"]
+    if severe:
+        raise HTTPException(status_code=409, detail={"message": "Severe scheduling conflict detected", "conflicts": severe})
+
+
+def _copy_visit_fields(visit: Visit, data: dict):
+    for key, value in data.items():
+        setattr(visit, key, value)
+
+
+def _recurrence_delta(rule: str):
+    if rule == "daily":
+        return timedelta(days=1)
+    if rule == "weekly":
+        return timedelta(weeks=1)
+    if rule == "biweekly":
+        return timedelta(weeks=2)
+    return None
+
+
+def _add_month(dt: datetime) -> datetime:
+    month = dt.month + 1
+    year = dt.year + (month - 1) // 12
+    month = ((month - 1) % 12) + 1
+    days = [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    return dt.replace(year=year, month=month, day=min(dt.day, days[month - 1]))
 
 
 @router.get("/dashboard/summary")
@@ -125,6 +272,40 @@ def delete_caregiver(id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+@router.get('/caregivers/{caregiver_id}/availability')
+def caregiver_availability(caregiver_id: int, db: Session = Depends(get_db)):
+    get_or_404(db, Caregiver, caregiver_id)
+    return db.query(CaregiverAvailability).filter(CaregiverAvailability.caregiver_id == caregiver_id).order_by(CaregiverAvailability.day_of_week.asc()).all()
+
+
+@router.post('/caregivers/{caregiver_id}/availability')
+def create_caregiver_availability(caregiver_id: int, payload: CaregiverAvailabilityCreate, db: Session = Depends(get_db)):
+    get_or_404(db, Caregiver, caregiver_id)
+    if payload.start_time and payload.end_time and payload.end_time <= payload.start_time:
+        raise HTTPException(status_code=400, detail='Availability end time must be after start time')
+    obj = CaregiverAvailability(caregiver_id=caregiver_id, **payload.model_dump())
+    db.add(obj); db.commit(); db.refresh(obj)
+    return obj
+
+
+@router.put('/caregivers/availability/{availability_id}')
+def update_caregiver_availability(availability_id: int, payload: CaregiverAvailabilityUpdate, db: Session = Depends(get_db)):
+    obj = get_or_404(db, CaregiverAvailability, availability_id)
+    if payload.start_time and payload.end_time and payload.end_time <= payload.start_time:
+        raise HTTPException(status_code=400, detail='Availability end time must be after start time')
+    for key, value in payload.model_dump().items():
+        setattr(obj, key, value)
+    db.commit(); db.refresh(obj)
+    return obj
+
+
+@router.delete('/caregivers/availability/{availability_id}')
+def delete_caregiver_availability(availability_id: int, db: Session = Depends(get_db)):
+    obj = get_or_404(db, CaregiverAvailability, availability_id)
+    db.delete(obj); db.commit()
+    return {"ok": True}
+
+
 @router.get('/intake')
 def list_intake(db: Session = Depends(get_db)):
     return db.query(IntakeRequest).order_by(IntakeRequest.created_at.desc()).all()
@@ -177,6 +358,157 @@ def delete_visit(id: int, db: Session = Depends(get_db)):
     obj = get_or_404(db, Visit, id)
     db.delete(obj); db.commit()
     return {"ok": True}
+
+
+@router.get('/schedule/calendar')
+def schedule_calendar(start: datetime | None = Query(default=None), end: datetime | None = Query(default=None), caregiver_id: int | None = None, client_id: int | None = None, status: str | None = None, db: Session = Depends(get_db)):
+    query = db.query(Visit)
+    if start:
+        query = query.filter(Visit.scheduled_end >= start)
+    if end:
+        query = query.filter(Visit.scheduled_start <= end)
+    if caregiver_id:
+        query = query.filter(Visit.caregiver_id == caregiver_id)
+    if client_id:
+        query = query.filter(Visit.client_id == client_id)
+    if status:
+        query = query.filter(Visit.status == status)
+    visits = query.order_by(Visit.scheduled_start.asc()).all()
+    conflicts = _detect_conflicts(db, start=start, end=end)
+    return [_calendar_visit_payload(db, visit, conflicts) for visit in visits]
+
+
+@router.post('/schedule/visits')
+def schedule_create_visit(payload: VisitCreate, db: Session = Depends(get_db)):
+    obj = Visit(**payload.model_dump())
+    db.add(obj); db.flush()
+    _assert_no_severe_conflicts(db, obj)
+    db.commit(); db.refresh(obj)
+    return _calendar_visit_payload(db, obj, _detect_conflicts(db, visit=obj))
+
+
+@router.put('/schedule/visits/{visit_id}')
+def schedule_update_visit(visit_id: int, payload: VisitUpdate, db: Session = Depends(get_db)):
+    obj = get_or_404(db, Visit, visit_id)
+    _copy_visit_fields(obj, payload.model_dump())
+    db.flush()
+    _assert_no_severe_conflicts(db, obj)
+    db.commit(); db.refresh(obj)
+    return _calendar_visit_payload(db, obj, _detect_conflicts(db, visit=obj))
+
+
+@router.delete('/schedule/visits/{visit_id}')
+def schedule_delete_visit(visit_id: int, db: Session = Depends(get_db)):
+    obj = get_or_404(db, Visit, visit_id)
+    db.delete(obj); db.commit()
+    return {"ok": True}
+
+
+@router.post('/schedule/visits/{visit_id}/move')
+def schedule_move_visit(visit_id: int, payload: VisitMove, db: Session = Depends(get_db)):
+    obj = get_or_404(db, Visit, visit_id)
+    old_start, old_end = obj.scheduled_start, obj.scheduled_end
+    obj.scheduled_start = payload.scheduled_start
+    obj.scheduled_end = payload.scheduled_end
+    db.flush()
+    try:
+        _assert_no_severe_conflicts(db, obj)
+    except HTTPException:
+        obj.scheduled_start = old_start
+        obj.scheduled_end = old_end
+        db.rollback()
+        raise
+    db.commit(); db.refresh(obj)
+    return _calendar_visit_payload(db, obj, _detect_conflicts(db, visit=obj))
+
+
+@router.post('/schedule/recurring')
+def schedule_create_recurring(payload: RecurringVisitCreate, db: Session = Depends(get_db)):
+    if payload.scheduled_end <= payload.scheduled_start:
+        raise HTTPException(status_code=400, detail='Visit end time must be after start time')
+    if payload.recurrence_end_date < payload.scheduled_start.date():
+        raise HTTPException(status_code=400, detail='Recurrence end date must be after the first visit')
+    group_id = str(uuid.uuid4())
+    visits = []
+    current_start = payload.scheduled_start
+    current_end = payload.scheduled_end
+    delta = _recurrence_delta(payload.recurrence_rule)
+    index = 0
+    while current_start.date() <= payload.recurrence_end_date and len(visits) < 370:
+        data = payload.model_dump()
+        data.update({
+            "scheduled_start": current_start,
+            "scheduled_end": current_end,
+            "recurrence_group_id": group_id,
+            "generated_from_recurring": index > 0,
+        })
+        visit = Visit(**data)
+        db.add(visit); db.flush()
+        _assert_no_severe_conflicts(db, visit)
+        visits.append(visit)
+        index += 1
+        if payload.recurrence_rule == "monthly":
+            current_start = _add_month(current_start)
+            current_end = _add_month(current_end)
+        else:
+            current_start = current_start + delta
+            current_end = current_end + delta
+    db.commit()
+    return [_calendar_visit_payload(db, visit, _detect_conflicts(db, visit=visit)) for visit in visits]
+
+
+@router.get('/schedule/conflicts')
+def schedule_conflicts(start: datetime | None = Query(default=None), end: datetime | None = Query(default=None), db: Session = Depends(get_db)):
+    return _detect_conflicts(db, start=start, end=end)
+
+
+@router.get('/schedule/daily-summary')
+def schedule_daily_summary(day: date | None = Query(default=None), db: Session = Depends(get_db)):
+    target = day or date.today()
+    start = datetime.combine(target, time.min)
+    end = datetime.combine(target, time.max)
+    visits = db.query(Visit).filter(Visit.scheduled_start >= start, Visit.scheduled_start <= end).order_by(Visit.scheduled_start.asc()).all()
+    conflicts = _detect_conflicts(db, start=start, end=end)
+    upcoming = [v for v in visits if v.scheduled_start >= datetime.utcnow() and v.status in ['scheduled', 'in_progress']][:5]
+    caregiver_ids = {v.caregiver_id for v in visits}
+    return {
+        "date": target.isoformat(),
+        "total_visits": len(visits),
+        "completed_visits": len([v for v in visits if v.status == 'completed']),
+        "missed_visits": len([v for v in visits if v.status == 'missed']),
+        "caregivers_on_shift": len(caregiver_ids),
+        "upcoming_visits": [_calendar_visit_payload(db, v, conflicts) for v in upcoming],
+        "unresolved_conflicts": conflicts,
+    }
+
+
+@router.get('/schedule/upcoming-reminders')
+def schedule_upcoming_reminders(db: Session = Depends(get_db)):
+    now = datetime.utcnow()
+    reminders = []
+    upcoming = db.query(Visit).filter(Visit.status == 'scheduled', Visit.scheduled_start >= now, Visit.scheduled_start <= now + timedelta(hours=2)).order_by(Visit.scheduled_start.asc()).all()
+    for visit in upcoming:
+        minutes = max(0, int((visit.scheduled_start - now).total_seconds() // 60))
+        reminders.append({
+            "type": "upcoming_visit",
+            "visit_id": visit.id,
+            "message": f"Visit for {_client_name(db, visit.client_id)} starts in {minutes} minutes.",
+        })
+    overdue = db.query(Visit).filter(Visit.status == 'scheduled', Visit.scheduled_start < now, Visit.scheduled_end >= now).order_by(Visit.scheduled_start.asc()).all()
+    for visit in overdue:
+        reminders.append({
+            "type": "overdue_check_in",
+            "visit_id": visit.id,
+            "message": f"{_caregiver_name(db, visit.caregiver_id)} has not checked in for {_client_name(db, visit.client_id)}.",
+        })
+    missed = db.query(Visit).filter(Visit.status == 'scheduled', Visit.scheduled_end < now).order_by(Visit.scheduled_end.asc()).limit(10).all()
+    for visit in missed:
+        reminders.append({
+            "type": "missed_visit",
+            "visit_id": visit.id,
+            "message": f"Visit for {_client_name(db, visit.client_id)} is past its scheduled end time.",
+        })
+    return reminders
 
 
 DEFAULT_TASK_CHECKLIST = [

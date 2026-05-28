@@ -4,10 +4,14 @@ import { Card, PageHeader, StatCard, StatusPill } from '../../components/UI';
 
 export default function AdminDashboardPage() {
   const [data, setData] = useState(null);
+  const [dailySummary, setDailySummary] = useState(null);
+  const [reminders, setReminders] = useState([]);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    apiGet('/api/dashboard/summary').then(setData).catch((e) => setError(e.message));
+    Promise.all([apiGet('/api/dashboard/summary'), apiGet('/api/schedule/daily-summary'), apiGet('/api/schedule/upcoming-reminders')])
+      .then(([summary, daily, reminderData]) => { setData(summary); setDailySummary(daily); setReminders(reminderData); })
+      .catch((e) => setError(e.message));
   }, []);
 
   if (error) return <Card>Failed to load dashboard: {error}</Card>;
@@ -32,6 +36,13 @@ export default function AdminDashboardPage() {
             <StatusPill status={{ className: 'completed', text: `Completed ${data.completed_visits_count}` }} />
             <StatusPill status={{ className: 'missed', text: `Missed ${data.missed_visits_count}` }} />
           </div>
+        </Card>
+        {dailySummary && <Card title="Daily Schedule Summary">
+          <p><strong>{dailySummary.total_visits}</strong> total visits today with <strong>{dailySummary.unresolved_conflicts.length}</strong> unresolved conflict(s).</p>
+          {dailySummary.upcoming_visits.length === 0 ? <p className="empty-state">No upcoming visits remaining today.</p> : dailySummary.upcoming_visits.map((visit) => <p key={visit.id}>{visit.client_name} • {new Date(visit.scheduled_start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</p>)}
+        </Card>}
+        <Card title="Reminder Notifications">
+          {reminders.length === 0 ? <p className="empty-state">No reminders awaiting action.</p> : reminders.slice(0, 5).map((reminder, index) => <div className="reminder-card" key={`${reminder.type}-${index}`}>{reminder.message}</div>)}
         </Card>
       </section>
     </>
