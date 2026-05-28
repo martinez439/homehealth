@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 .venv/
 backend/.venv/
+__pycache__/
+*.pyc
+*.db
+backend/homehealth.db
+backend/.venv/
