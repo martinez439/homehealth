@@ -1,12 +1,12 @@
 from datetime import date, datetime, time, timedelta
 import json
-import uuid
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.models.models import Caregiver, CaregiverAvailability, Client, FamilyContact, FamilyMessage, IntakeRequest, Visit
+from app.models.models import Caregiver, CaregiverAvailability, Client, FamilyContact, FamilyMessage, IntakeRequest, User, Visit
+from app.audit import write_audit_log
+from app.auth import require_admin, require_caregiver_or_admin, require_family_or_admin
 from app.schemas.schemas import (
     CaregiverCreate,
     CaregiverUpdate,
@@ -33,6 +33,16 @@ def get_or_404(db: Session, model, obj_id: int):
     if not obj:
         raise HTTPException(status_code=404, detail=f"{model.__name__} not found")
     return obj
+
+
+def _ensure_family_client_access(current_user: User, client_id: int) -> None:
+    if current_user.role == "family" and current_user.client_id != client_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _ensure_caregiver_visit_access(current_user: User, visit: Visit) -> None:
+    if current_user.role == "caregiver" and current_user.caregiver_id != visit.caregiver_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 def _client_name(db: Session, client_id: int) -> str:
@@ -178,7 +188,7 @@ def _add_month(dt: datetime) -> datetime:
 
 
 @router.get("/dashboard/summary")
-def dashboard_summary(db: Session = Depends(get_db)):
+def dashboard_summary(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     today = date.today()
     start = datetime.combine(today, time.min)
     end = datetime.combine(today, time.max)
@@ -207,79 +217,87 @@ def dashboard_summary(db: Session = Depends(get_db)):
 
 
 @router.get('/clients')
-def list_clients(db: Session = Depends(get_db)):
+def list_clients(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     return db.query(Client).order_by(Client.last_name.asc()).all()
 
 
 @router.post('/clients')
-def create_client(payload: ClientCreate, db: Session = Depends(get_db)):
+def create_client(payload: ClientCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = Client(**payload.model_dump())
-    db.add(obj); db.commit(); db.refresh(obj)
+    db.add(obj); db.flush()
+    write_audit_log(db, action='client_created', entity_type='client', entity_id=obj.id, description='Client created', user=current_user)
+    db.commit(); db.refresh(obj)
     return obj
 
 
 @router.get('/clients/{id}')
-def get_client(id: int, db: Session = Depends(get_db)):
+def get_client(id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     return get_or_404(db, Client, id)
 
 
 @router.put('/clients/{id}')
-def update_client(id: int, payload: ClientUpdate, db: Session = Depends(get_db)):
+def update_client(id: int, payload: ClientUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = get_or_404(db, Client, id)
     for key, value in payload.model_dump().items():
         setattr(obj, key, value)
+    write_audit_log(db, action='client_updated', entity_type='client', entity_id=obj.id, description='Client updated', user=current_user)
     db.commit(); db.refresh(obj)
     return obj
 
 
 @router.delete('/clients/{id}')
-def delete_client(id: int, db: Session = Depends(get_db)):
+def delete_client(id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = get_or_404(db, Client, id)
+    write_audit_log(db, action='client_deleted', entity_type='client', entity_id=obj.id, description='Client deleted', user=current_user)
     db.delete(obj); db.commit()
     return {"ok": True}
 
 
 @router.get('/caregivers')
-def list_caregivers(db: Session = Depends(get_db)):
+def list_caregivers(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     return db.query(Caregiver).order_by(Caregiver.last_name.asc()).all()
 
 
 @router.post('/caregivers')
-def create_caregiver(payload: CaregiverCreate, db: Session = Depends(get_db)):
+def create_caregiver(payload: CaregiverCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = Caregiver(**payload.model_dump())
-    db.add(obj); db.commit(); db.refresh(obj)
+    db.add(obj); db.flush()
+    write_audit_log(db, action='caregiver_created', entity_type='caregiver', entity_id=obj.id, description='Caregiver created', user=current_user)
+    db.commit(); db.refresh(obj)
     return obj
 
 
 @router.get('/caregivers/{id}')
-def get_caregiver(id: int, db: Session = Depends(get_db)):
+def get_caregiver(id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     return get_or_404(db, Caregiver, id)
 
 
 @router.put('/caregivers/{id}')
-def update_caregiver(id: int, payload: CaregiverUpdate, db: Session = Depends(get_db)):
+def update_caregiver(id: int, payload: CaregiverUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = get_or_404(db, Caregiver, id)
     for key, value in payload.model_dump().items():
         setattr(obj, key, value)
+    write_audit_log(db, action='caregiver_updated', entity_type='caregiver', entity_id=obj.id, description='Caregiver updated', user=current_user)
     db.commit(); db.refresh(obj)
     return obj
 
 
 @router.delete('/caregivers/{id}')
-def delete_caregiver(id: int, db: Session = Depends(get_db)):
+def delete_caregiver(id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = get_or_404(db, Caregiver, id)
+    write_audit_log(db, action='caregiver_deleted', entity_type='caregiver', entity_id=obj.id, description='Caregiver deleted', user=current_user)
     db.delete(obj); db.commit()
     return {"ok": True}
 
 
 @router.get('/caregivers/{caregiver_id}/availability')
-def caregiver_availability(caregiver_id: int, db: Session = Depends(get_db)):
+def caregiver_availability(caregiver_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     get_or_404(db, Caregiver, caregiver_id)
     return db.query(CaregiverAvailability).filter(CaregiverAvailability.caregiver_id == caregiver_id).order_by(CaregiverAvailability.day_of_week.asc()).all()
 
 
 @router.post('/caregivers/{caregiver_id}/availability')
-def create_caregiver_availability(caregiver_id: int, payload: CaregiverAvailabilityCreate, db: Session = Depends(get_db)):
+def create_caregiver_availability(caregiver_id: int, payload: CaregiverAvailabilityCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     get_or_404(db, Caregiver, caregiver_id)
     if payload.start_time and payload.end_time and payload.end_time <= payload.start_time:
         raise HTTPException(status_code=400, detail='Availability end time must be after start time')
@@ -289,7 +307,7 @@ def create_caregiver_availability(caregiver_id: int, payload: CaregiverAvailabil
 
 
 @router.put('/caregivers/availability/{availability_id}')
-def update_caregiver_availability(availability_id: int, payload: CaregiverAvailabilityUpdate, db: Session = Depends(get_db)):
+def update_caregiver_availability(availability_id: int, payload: CaregiverAvailabilityUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = get_or_404(db, CaregiverAvailability, availability_id)
     if payload.start_time and payload.end_time and payload.end_time <= payload.start_time:
         raise HTTPException(status_code=400, detail='Availability end time must be after start time')
@@ -300,68 +318,75 @@ def update_caregiver_availability(availability_id: int, payload: CaregiverAvaila
 
 
 @router.delete('/caregivers/availability/{availability_id}')
-def delete_caregiver_availability(availability_id: int, db: Session = Depends(get_db)):
+def delete_caregiver_availability(availability_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = get_or_404(db, CaregiverAvailability, availability_id)
     db.delete(obj); db.commit()
     return {"ok": True}
 
 
 @router.get('/intake')
-def list_intake(db: Session = Depends(get_db)):
+def list_intake(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     return db.query(IntakeRequest).order_by(IntakeRequest.created_at.desc()).all()
 
 
 @router.post('/intake')
 def create_intake(payload: IntakeCreate, db: Session = Depends(get_db)):
     obj = IntakeRequest(**payload.model_dump())
-    db.add(obj); db.commit(); db.refresh(obj)
+    db.add(obj); db.flush()
+    write_audit_log(db, action='intake_created', entity_type='intake_request', entity_id=obj.id, description='Intake request created')
+    db.commit(); db.refresh(obj)
     return obj
 
 
 @router.put('/intake/{id}')
-def update_intake(id: int, payload: IntakeUpdate, db: Session = Depends(get_db)):
+def update_intake(id: int, payload: IntakeUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = get_or_404(db, IntakeRequest, id)
     for key, value in payload.model_dump().items():
         setattr(obj, key, value)
+    write_audit_log(db, action='intake_updated', entity_type='intake_request', entity_id=obj.id, description='Intake request updated', user=current_user)
     db.commit(); db.refresh(obj)
     return obj
 
 
 @router.get('/visits')
-def list_visits(db: Session = Depends(get_db)):
+def list_visits(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     return db.query(Visit).order_by(Visit.scheduled_start.asc()).all()
 
 
 @router.post('/visits')
-def create_visit(payload: VisitCreate, db: Session = Depends(get_db)):
+def create_visit(payload: VisitCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = Visit(**payload.model_dump())
-    db.add(obj); db.commit(); db.refresh(obj)
+    db.add(obj); db.flush()
+    write_audit_log(db, action='visit_created', entity_type='visit', entity_id=obj.id, description='Visit created', user=current_user)
+    db.commit(); db.refresh(obj)
     return obj
 
 
 @router.get('/visits/{id}')
-def get_visit(id: int, db: Session = Depends(get_db)):
+def get_visit(id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     return get_or_404(db, Visit, id)
 
 
 @router.put('/visits/{id}')
-def update_visit(id: int, payload: VisitUpdate, db: Session = Depends(get_db)):
+def update_visit(id: int, payload: VisitUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = get_or_404(db, Visit, id)
     for key, value in payload.model_dump().items():
         setattr(obj, key, value)
+    write_audit_log(db, action='visit_updated', entity_type='visit', entity_id=obj.id, description='Visit updated', user=current_user)
     db.commit(); db.refresh(obj)
     return obj
 
 
 @router.delete('/visits/{id}')
-def delete_visit(id: int, db: Session = Depends(get_db)):
+def delete_visit(id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = get_or_404(db, Visit, id)
+    write_audit_log(db, action='visit_deleted', entity_type='visit', entity_id=obj.id, description='Visit deleted', user=current_user)
     db.delete(obj); db.commit()
     return {"ok": True}
 
 
 @router.get('/schedule/calendar')
-def schedule_calendar(start: datetime | None = Query(default=None), end: datetime | None = Query(default=None), caregiver_id: int | None = None, client_id: int | None = None, status: str | None = None, db: Session = Depends(get_db)):
+def schedule_calendar(start: datetime | None = Query(default=None), end: datetime | None = Query(default=None), caregiver_id: int | None = None, client_id: int | None = None, status: str | None = None, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     query = db.query(Visit)
     if start:
         query = query.filter(Visit.scheduled_end >= start)
@@ -379,7 +404,7 @@ def schedule_calendar(start: datetime | None = Query(default=None), end: datetim
 
 
 @router.post('/schedule/visits')
-def schedule_create_visit(payload: VisitCreate, db: Session = Depends(get_db)):
+def schedule_create_visit(payload: VisitCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = Visit(**payload.model_dump())
     db.add(obj); db.flush()
     _assert_no_severe_conflicts(db, obj)
@@ -388,7 +413,7 @@ def schedule_create_visit(payload: VisitCreate, db: Session = Depends(get_db)):
 
 
 @router.put('/schedule/visits/{visit_id}')
-def schedule_update_visit(visit_id: int, payload: VisitUpdate, db: Session = Depends(get_db)):
+def schedule_update_visit(visit_id: int, payload: VisitUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = get_or_404(db, Visit, visit_id)
     _copy_visit_fields(obj, payload.model_dump())
     db.flush()
@@ -398,14 +423,14 @@ def schedule_update_visit(visit_id: int, payload: VisitUpdate, db: Session = Dep
 
 
 @router.delete('/schedule/visits/{visit_id}')
-def schedule_delete_visit(visit_id: int, db: Session = Depends(get_db)):
+def schedule_delete_visit(visit_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = get_or_404(db, Visit, visit_id)
     db.delete(obj); db.commit()
     return {"ok": True}
 
 
 @router.post('/schedule/visits/{visit_id}/move')
-def schedule_move_visit(visit_id: int, payload: VisitMove, db: Session = Depends(get_db)):
+def schedule_move_visit(visit_id: int, payload: VisitMove, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     obj = get_or_404(db, Visit, visit_id)
     old_start, old_end = obj.scheduled_start, obj.scheduled_end
     obj.scheduled_start = payload.scheduled_start
@@ -423,7 +448,7 @@ def schedule_move_visit(visit_id: int, payload: VisitMove, db: Session = Depends
 
 
 @router.post('/schedule/recurring')
-def schedule_create_recurring(payload: RecurringVisitCreate, db: Session = Depends(get_db)):
+def schedule_create_recurring(payload: RecurringVisitCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     if payload.scheduled_end <= payload.scheduled_start:
         raise HTTPException(status_code=400, detail='Visit end time must be after start time')
     if payload.recurrence_end_date < payload.scheduled_start.date():
@@ -458,12 +483,12 @@ def schedule_create_recurring(payload: RecurringVisitCreate, db: Session = Depen
 
 
 @router.get('/schedule/conflicts')
-def schedule_conflicts(start: datetime | None = Query(default=None), end: datetime | None = Query(default=None), db: Session = Depends(get_db)):
+def schedule_conflicts(start: datetime | None = Query(default=None), end: datetime | None = Query(default=None), db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     return _detect_conflicts(db, start=start, end=end)
 
 
 @router.get('/schedule/daily-summary')
-def schedule_daily_summary(day: date | None = Query(default=None), db: Session = Depends(get_db)):
+def schedule_daily_summary(day: date | None = Query(default=None), db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     target = day or date.today()
     start = datetime.combine(target, time.min)
     end = datetime.combine(target, time.max)
@@ -483,7 +508,7 @@ def schedule_daily_summary(day: date | None = Query(default=None), db: Session =
 
 
 @router.get('/schedule/upcoming-reminders')
-def schedule_upcoming_reminders(db: Session = Depends(get_db)):
+def schedule_upcoming_reminders(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     now = datetime.utcnow()
     reminders = []
     upcoming = db.query(Visit).filter(Visit.status == 'scheduled', Visit.scheduled_start >= now, Visit.scheduled_start <= now + timedelta(hours=2)).order_by(Visit.scheduled_start.asc()).all()
@@ -557,8 +582,12 @@ def _visit_payload(db: Session, visit: Visit):
 
 
 @router.get('/caregiver/visits')
-def caregiver_visits(caregiver_id: int | None = Query(default=None), db: Session = Depends(get_db)):
+def caregiver_visits(caregiver_id: int | None = Query(default=None), db: Session = Depends(get_db), current_user: User = Depends(require_caregiver_or_admin)):
     query = db.query(Visit).order_by(Visit.scheduled_start.asc())
+    if current_user.role == 'caregiver':
+        if current_user.caregiver_id is None:
+            return []
+        caregiver_id = current_user.caregiver_id
     if caregiver_id:
         query = query.filter(Visit.caregiver_id == caregiver_id)
     visits = query.all()
@@ -566,26 +595,30 @@ def caregiver_visits(caregiver_id: int | None = Query(default=None), db: Session
 
 
 @router.get('/caregiver/visits/{visit_id}')
-def caregiver_visit_detail(visit_id: int, db: Session = Depends(get_db)):
+def caregiver_visit_detail(visit_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_caregiver_or_admin)):
     visit = get_or_404(db, Visit, visit_id)
+    _ensure_caregiver_visit_access(current_user, visit)
     return _visit_payload(db, visit)
 
 
 @router.post('/caregiver/visits/{visit_id}/check-in')
-def caregiver_check_in(visit_id: int, payload: dict, db: Session = Depends(get_db)):
+def caregiver_check_in(visit_id: int, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(require_caregiver_or_admin)):
     visit = get_or_404(db, Visit, visit_id)
+    _ensure_caregiver_visit_access(current_user, visit)
     if visit.status != 'scheduled':
         raise HTTPException(status_code=400, detail='Visit cannot be checked in from current status')
     visit.checked_in_at = datetime.utcnow()
     visit.status = 'in_progress'
     visit.check_in_location = payload.get('location')
+    write_audit_log(db, action='visit_check_in', entity_type='visit', entity_id=visit.id, description='Caregiver checked in', user=current_user)
     db.commit(); db.refresh(visit)
     return _visit_payload(db, visit)
 
 
 @router.post('/caregiver/visits/{visit_id}/check-out')
-def caregiver_check_out(visit_id: int, payload: dict, db: Session = Depends(get_db)):
+def caregiver_check_out(visit_id: int, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(require_caregiver_or_admin)):
     visit = get_or_404(db, Visit, visit_id)
+    _ensure_caregiver_visit_access(current_user, visit)
     if not visit.checked_in_at:
         raise HTTPException(status_code=400, detail='Visit must be checked in before checking out')
     visit.checked_out_at = datetime.utcnow()
@@ -593,21 +626,24 @@ def caregiver_check_out(visit_id: int, payload: dict, db: Session = Depends(get_
     visit.check_out_location = payload.get('location')
     if visit.mileage_start is not None and visit.mileage_end is not None:
         visit.mileage_total = max(0, visit.mileage_end - visit.mileage_start)
+    write_audit_log(db, action='visit_check_out', entity_type='visit', entity_id=visit.id, description='Caregiver checked out', user=current_user)
     db.commit(); db.refresh(visit)
     return _visit_payload(db, visit)
 
 
 @router.post('/caregiver/visits/{visit_id}/notes')
-def caregiver_notes(visit_id: int, payload: dict, db: Session = Depends(get_db)):
+def caregiver_notes(visit_id: int, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(require_caregiver_or_admin)):
     visit = get_or_404(db, Visit, visit_id)
+    _ensure_caregiver_visit_access(current_user, visit)
     visit.caregiver_notes = payload.get('caregiver_notes', '')
     db.commit(); db.refresh(visit)
     return _visit_payload(db, visit)
 
 
 @router.put('/caregiver/visits/{visit_id}/tasks')
-def caregiver_tasks(visit_id: int, payload: dict, db: Session = Depends(get_db)):
+def caregiver_tasks(visit_id: int, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(require_caregiver_or_admin)):
     visit = get_or_404(db, Visit, visit_id)
+    _ensure_caregiver_visit_access(current_user, visit)
     tasks = payload.get('task_checklist', DEFAULT_TASK_CHECKLIST)
     visit.task_checklist = json.dumps(tasks)
     db.commit(); db.refresh(visit)
@@ -615,8 +651,9 @@ def caregiver_tasks(visit_id: int, payload: dict, db: Session = Depends(get_db))
 
 
 @router.put('/caregiver/visits/{visit_id}/mileage')
-def caregiver_mileage(visit_id: int, payload: dict, db: Session = Depends(get_db)):
+def caregiver_mileage(visit_id: int, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(require_caregiver_or_admin)):
     visit = get_or_404(db, Visit, visit_id)
+    _ensure_caregiver_visit_access(current_user, visit)
     visit.mileage_start = payload.get('mileage_start')
     visit.mileage_end = payload.get('mileage_end')
     if visit.mileage_start is not None and visit.mileage_end is not None:
@@ -626,8 +663,10 @@ def caregiver_mileage(visit_id: int, payload: dict, db: Session = Depends(get_db
 
 
 @router.get('/caregiver/alerts/missed-check-ins')
-def missed_checkins(caregiver_id: int | None = Query(default=None), db: Session = Depends(get_db)):
+def missed_checkins(caregiver_id: int | None = Query(default=None), db: Session = Depends(get_db), current_user: User = Depends(require_caregiver_or_admin)):
     query = db.query(Visit).filter(Visit.status == 'scheduled', Visit.scheduled_start < datetime.utcnow(), Visit.checked_in_at.is_(None))
+    if current_user.role == 'caregiver':
+        caregiver_id = current_user.caregiver_id
     if caregiver_id:
         query = query.filter(Visit.caregiver_id == caregiver_id)
     visits = query.all()
@@ -665,14 +704,16 @@ def _family_client_payload(db: Session, client: Client):
 
 
 @router.get('/family/client/{client_id}')
-def family_client(client_id: int, db: Session = Depends(get_db)):
+def family_client(client_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_family_or_admin)):
     client = _ensure_client(db, client_id)
+    _ensure_family_client_access(current_user, client_id)
     return _family_client_payload(db, client)
 
 
 @router.get('/family/client/{client_id}/visits/upcoming')
-def family_upcoming_visits(client_id: int, db: Session = Depends(get_db)):
+def family_upcoming_visits(client_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_family_or_admin)):
     _ensure_client(db, client_id)
+    _ensure_family_client_access(current_user, client_id)
     visits = (
         db.query(Visit)
         .filter(Visit.client_id == client_id, Visit.status.in_(['scheduled', 'in_progress']))
@@ -684,8 +725,9 @@ def family_upcoming_visits(client_id: int, db: Session = Depends(get_db)):
 
 
 @router.get('/family/client/{client_id}/visits/completed')
-def family_completed_visits(client_id: int, db: Session = Depends(get_db)):
+def family_completed_visits(client_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_family_or_admin)):
     _ensure_client(db, client_id)
+    _ensure_family_client_access(current_user, client_id)
     visits = (
         db.query(Visit)
         .filter(Visit.client_id == client_id, Visit.status == 'completed')
@@ -697,8 +739,9 @@ def family_completed_visits(client_id: int, db: Session = Depends(get_db)):
 
 
 @router.get('/family/client/{client_id}/notes')
-def family_notes(client_id: int, db: Session = Depends(get_db)):
+def family_notes(client_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_family_or_admin)):
     _ensure_client(db, client_id)
+    _ensure_family_client_access(current_user, client_id)
     visits = (
         db.query(Visit)
         .filter(Visit.client_id == client_id, Visit.caregiver_notes != '')
@@ -721,51 +764,63 @@ def family_notes(client_id: int, db: Session = Depends(get_db)):
 
 
 @router.get('/family/client/{client_id}/contacts')
-def family_contacts(client_id: int, db: Session = Depends(get_db)):
+def family_contacts(client_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_family_or_admin)):
     _ensure_client(db, client_id)
+    _ensure_family_client_access(current_user, client_id)
     return db.query(FamilyContact).filter(FamilyContact.client_id == client_id).order_by(FamilyContact.is_primary.desc(), FamilyContact.last_name.asc()).all()
 
 
 @router.post('/family/client/{client_id}/contacts')
-def create_family_contact(client_id: int, payload: FamilyContactCreate, db: Session = Depends(get_db)):
+def create_family_contact(client_id: int, payload: FamilyContactCreate, db: Session = Depends(get_db), current_user: User = Depends(require_family_or_admin)):
     _ensure_client(db, client_id)
+    _ensure_family_client_access(current_user, client_id)
     contact = FamilyContact(client_id=client_id, **payload.model_dump())
     if contact.is_primary:
         db.query(FamilyContact).filter(FamilyContact.client_id == client_id).update({FamilyContact.is_primary: False})
-    db.add(contact); db.commit(); db.refresh(contact)
+    db.add(contact); db.flush()
+    write_audit_log(db, action='family_contact_created', entity_type='family_contact', entity_id=contact.id, description='Family contact created', user=current_user)
+    db.commit(); db.refresh(contact)
     return contact
 
 
 @router.put('/family/contacts/{contact_id}')
-def update_family_contact(contact_id: int, payload: FamilyContactUpdate, db: Session = Depends(get_db)):
+def update_family_contact(contact_id: int, payload: FamilyContactUpdate, db: Session = Depends(get_db), current_user: User = Depends(require_family_or_admin)):
     contact = get_or_404(db, FamilyContact, contact_id)
+    _ensure_family_client_access(current_user, contact.client_id)
     data = payload.model_dump()
     if data.get('is_primary'):
         db.query(FamilyContact).filter(FamilyContact.client_id == contact.client_id, FamilyContact.id != contact.id).update({FamilyContact.is_primary: False})
     for key, value in data.items():
         setattr(contact, key, value)
+    write_audit_log(db, action='family_contact_updated', entity_type='family_contact', entity_id=contact.id, description='Family contact updated', user=current_user)
     db.commit(); db.refresh(contact)
     return contact
 
 
 @router.delete('/family/contacts/{contact_id}')
-def delete_family_contact(contact_id: int, db: Session = Depends(get_db)):
+def delete_family_contact(contact_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_family_or_admin)):
     contact = get_or_404(db, FamilyContact, contact_id)
+    _ensure_family_client_access(current_user, contact.client_id)
+    write_audit_log(db, action='family_contact_deleted', entity_type='family_contact', entity_id=contact.id, description='Family contact deleted', user=current_user)
     db.delete(contact); db.commit()
     return {"ok": True}
 
 
 @router.get('/family/client/{client_id}/messages')
-def family_messages(client_id: int, db: Session = Depends(get_db)):
+def family_messages(client_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_family_or_admin)):
     _ensure_client(db, client_id)
+    _ensure_family_client_access(current_user, client_id)
     return db.query(FamilyMessage).filter(FamilyMessage.client_id == client_id).order_by(FamilyMessage.created_at.desc()).all()
 
 
 @router.post('/family/client/{client_id}/messages')
-def create_family_message(client_id: int, payload: FamilyMessageCreate, db: Session = Depends(get_db)):
+def create_family_message(client_id: int, payload: FamilyMessageCreate, db: Session = Depends(get_db), current_user: User = Depends(require_family_or_admin)):
     _ensure_client(db, client_id)
+    _ensure_family_client_access(current_user, client_id)
     message = FamilyMessage(client_id=client_id, status='new', **payload.model_dump())
-    db.add(message); db.commit(); db.refresh(message)
+    db.add(message); db.flush()
+    write_audit_log(db, action='family_message_submitted', entity_type='family_message', entity_id=message.id, description='Family message submitted', user=current_user)
+    db.commit(); db.refresh(message)
     return message
 
 
@@ -780,8 +835,9 @@ def _timeline_item(item_id: str, item_type: str, title: str, description: str, t
 
 
 @router.get('/family/client/{client_id}/timeline')
-def family_timeline(client_id: int, db: Session = Depends(get_db)):
+def family_timeline(client_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_family_or_admin)):
     _ensure_client(db, client_id)
+    _ensure_family_client_access(current_user, client_id)
     items = []
     visits = db.query(Visit).filter(Visit.client_id == client_id).order_by(Visit.updated_at.desc()).limit(20).all()
     for visit in visits:

@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: homehealth
+      POSTGRES_PASSWORD: homehealth_dev
+      POSTGRES_DB: homehealth
+    ports: ["5432:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://homehealth:homehealth_dev@postgres:5432/homehealth
+      JWT_SECRET: local-compose-change-me
+      CORS_ORIGINS: http://localhost:5173,http://localhost:8080
+      ENVIRONMENT: development
+    ports: ["8000:8000"]
+    depends_on: [postgres]
+  frontend:
+    build: ./frontend
+    ports: ["8080:80"]
+    depends_on: [backend]
+volumes:
+  postgres_data:
