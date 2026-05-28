@@ -2,12 +2,31 @@ from datetime import datetime, timedelta
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.exc import OperationalError
 
 from app.api.routes.crud import router as api_router
-from app.db.database import Base, SessionLocal, engine
+from app.db.database import Base, DATABASE_URL, SessionLocal, engine, is_dev_mode, is_sqlite_url, reset_sqlite_db_file
 from app.models.models import Caregiver, Client, IntakeRequest, Visit
 
-Base.metadata.create_all(bind=engine)
+
+def initialize_database():
+    """
+    Create schema on startup. In local SQLite development, reset and recreate the DB
+    automatically when an old schema causes startup query failures.
+    """
+    Base.metadata.create_all(bind=engine)
+    try:
+        seed_demo_data()
+    except OperationalError:
+        # Dev-only recovery for schema drift in local SQLite MVP workflows.
+        if is_dev_mode() and is_sqlite_url(DATABASE_URL) and reset_sqlite_db_file(DATABASE_URL):
+            Base.metadata.drop_all(bind=engine)
+            Base.metadata.create_all(bind=engine)
+            seed_demo_data()
+            return
+        raise
+
+
 app = FastAPI(title='Home Health MVP API')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 app.include_router(api_router, prefix='/api')
@@ -43,7 +62,7 @@ def seed_demo_data():
         db.close()
 
 
-seed_demo_data()
+initialize_database()
 
 
 @app.get('/api/health')

@@ -16,7 +16,16 @@ export default function AdminClientsPage() {
     setForm(initial); setEditId(null); load();
   };
   const remove = async (id) => { if (confirm('Delete this client?')) { await apiDelete(`/api/clients/${id}`); load(); } };
-  const rows = clients.map((c) => ({ id: c.id, cells: [c.first_name[0]}));
+  const rows = clients.map((c) => ({
+    id: c.id,
+    cells: [
+      c.first_name || '-',
+      c.last_name || '-',
+      c.phone || '-',
+      <StatusPill status={{ className: c.status === 'active' ? 'completed' : 'scheduled', text: c.status }} />,
+      <div className='actions'><button className='btn' onClick={() => { setForm(c); setEditId(c.id); }}>Edit</button><button className='btn' onClick={() => remove(c.id)}>Delete</button></div>,
+    ],
+  }));
 
   return <>
     <PageHeader title="Client Database" subtitle="People-first records with quick care actions." />
@@ -33,10 +42,7 @@ export default function AdminClientsPage() {
       </form>
     </Card>
     <Card>
-      <DataTable headers={['Initial', 'Name', 'Care Level', 'City', 'Status', 'Actions']} rows={clients.map((c) => ({
-        id: c.id,
-        cells: [c.first_name?.[0] || '-', `${c.first_name} ${c.last_name}`, c.care_level || '-', c.city || '-', <StatusPill status={{ className: c.status === 'active' ? 'completed' : 'scheduled', text: c.status }} />, <div className='actions'><button className='btn' onClick={() => { setForm(c); setEditId(c.id); }}>Edit</button><button className='btn' onClick={() => remove(c.id)}>Delete</button></div>],
-      }))} />
+      <DataTable headers={['First Name', 'Last Name', 'Phone', 'Status', 'Actions']} rows={rows} />
     </Card>
   </>;
 }
