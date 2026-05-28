@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI
@@ -5,25 +6,33 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import OperationalError
 
 from app.api.routes.crud import router as api_router
-from app.db.database import Base, DATABASE_URL, SessionLocal, engine, is_dev_mode, is_sqlite_url, reset_sqlite_db_file
+from app.db.database import Base, DATABASE_URL, SessionLocal, engine, is_dev_mode, is_sqlite_url
 from app.models.models import Caregiver, Client, IntakeRequest, Visit
+
+logger = logging.getLogger(__name__)
+
+
+def _handle_sqlite_schema_mismatch(error: Exception) -> None:
+    logger.warning(
+        "SQLite schema mismatch detected. Please run:\npython reset_db.py\n"
+        "Then restart: uvicorn app.main:app --reload --port 8000"
+    )
+    logger.debug("Startup database error", exc_info=error)
+    raise SystemExit(1)
 
 
 def initialize_database():
     """
-    Create schema on startup. In local SQLite development, reset and recreate the DB
-    automatically when an old schema causes startup query failures.
+    Create schema on startup and seed demo data when needed.
+    In local SQLite development, fail gracefully on schema drift so devs can
+    run the reset utility manually without Windows file-lock crashes.
     """
     Base.metadata.create_all(bind=engine)
     try:
         seed_demo_data()
-    except OperationalError:
-        # Dev-only recovery for schema drift in local SQLite MVP workflows.
-        if is_dev_mode() and is_sqlite_url(DATABASE_URL) and reset_sqlite_db_file(DATABASE_URL):
-            Base.metadata.drop_all(bind=engine)
-            Base.metadata.create_all(bind=engine)
-            seed_demo_data()
-            return
+    except OperationalError as exc:
+        if is_dev_mode() and is_sqlite_url(DATABASE_URL):
+            _handle_sqlite_schema_mismatch(exc)
         raise
 
 

@@ -41,19 +41,3 @@ def get_db():
         yield db
     finally:
         db.close()
-
-
-def reset_sqlite_db_file(url: str) -> bool:
-    """
-    Development helper: remove the local SQLite DB file so schema can be recreated
-    from current SQLAlchemy models. This intentionally only runs for SQLite + dev mode.
-    """
-    if not (is_dev_mode() and is_sqlite_url(url)):
-        return False
-
-    db_path = sqlite_db_path(url)
-    if not db_path or not db_path.exists():
-        return False
-
-    db_path.unlink()
-    return True
