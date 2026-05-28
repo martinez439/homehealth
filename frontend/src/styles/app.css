@@ -58,3 +58,17 @@ body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--b
   .topbar{flex-wrap:wrap}
   .table-row{grid-template-columns:1fr 1fr}
 }
+
+.section-actions{display:flex; justify-content:flex-end; margin:0 0 1rem}
+.modal-backdrop{position:fixed; inset:0; background:rgba(43,43,43,.35); display:flex; align-items:center; justify-content:center; padding:1rem; z-index:1000}
+.modal-card{background:var(--white); border:1px solid #e6d8c8; border-radius:20px; box-shadow:var(--shadow); width:min(700px,100%); max-height:90vh; display:flex; flex-direction:column}
+.modal-header{display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem 1.1rem .4rem}
+.modal-header h2{margin:0; font-family:'Playfair Display', serif; color:#216d6b}
+.modal-close{border:1px solid #dccdbd; background:#fff; color:#6e6e6e; border-radius:999px; width:32px; height:32px; font-size:1.1rem; cursor:pointer}
+.modal-body{padding:.6rem 1.1rem 1.1rem; overflow:auto}
+
+@media (max-width: 920px){
+  .section-actions{justify-content:stretch}
+  .section-actions .btn{width:100%}
+  .modal-card{max-height:95vh}
+}
