@@ -244,6 +244,14 @@ class UserLogin(BaseModel):
     password: str
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ForgotPasswordResponse(BaseModel):
+    message: str
+
+
 class UserRead(BaseModel):
     id: int
     email: str

@@ -30,6 +30,10 @@ export async function login(email, password) {
   return result;
 }
 
+export async function forgotPassword(email) {
+  return apiPost('/api/auth/forgot-password', { email });
+}
+
 export async function loadMe() {
   const user = await apiGet('/api/auth/me');
   localStorage.setItem(USER_KEY, JSON.stringify(user));

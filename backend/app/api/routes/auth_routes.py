@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
@@ -5,9 +7,12 @@ from app.audit import write_audit_log
 from app.auth import create_access_token, get_current_user, hash_password, verify_password
 from app.db.database import get_db
 from app.models.models import Caregiver, Client, User
-from app.schemas.schemas import TokenResponse, UserLogin, UserRead, UserRegister
+from app.schemas.schemas import ForgotPasswordRequest, ForgotPasswordResponse, TokenResponse, UserLogin, UserRead, UserRegister
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
+
+PASSWORD_RESET_MESSAGE = "If an account exists, password reset instructions will be sent."
 
 
 def _token_for(user: User) -> TokenResponse:
@@ -47,6 +52,29 @@ def login(payload: UserLogin, request: Request, db: Session = Depends(get_db)):
     write_audit_log(db, action="login_success", entity_type="user", entity_id=user.id, description="User logged in", user=user, request=request)
     db.commit(); db.refresh(user)
     return _token_for(user)
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordResponse)
+def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
+    email = payload.email.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+    write_audit_log(
+        db,
+        action="forgot_password_requested",
+        entity_type="user",
+        entity_id=user.id if user else None,
+        description="Password reset requested",
+        request=request,
+        actor_email=email,
+    )
+    # TODO: Generate a time-limited reset token and deliver it through the production email provider.
+    # TODO: Keep this response generic so account enumeration is never possible.
+    if user:
+        logger.info("Password reset requested for user_id=%s email=%s", user.id, email)
+    else:
+        logger.info("Password reset requested for non-matching email=%s", email)
+    db.commit()
+    return ForgotPasswordResponse(message=PASSWORD_RESET_MESSAGE)
 
 
 @router.get("/me", response_model=UserRead)
