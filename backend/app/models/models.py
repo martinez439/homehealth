@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.database import Base
@@ -69,3 +69,13 @@ class Visit(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(40), default="scheduled")
     service_type: Mapped[str] = mapped_column(String(120), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
+    checked_in_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    checked_out_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    check_in_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    check_out_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    mileage_start: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mileage_end: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mileage_total: Mapped[float | None] = mapped_column(Float, nullable=True)
+    task_checklist: Mapped[str] = mapped_column(Text, default="[]")
+    caregiver_notes: Mapped[str] = mapped_column(Text, default="")
+    missed_alert_sent: Mapped[bool] = mapped_column(Boolean, default=False)

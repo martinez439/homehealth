@@ -1,6 +1,7 @@
 from datetime import date, datetime, time
+import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -174,3 +175,126 @@ def delete_visit(id: int, db: Session = Depends(get_db)):
     obj = get_or_404(db, Visit, id)
     db.delete(obj); db.commit()
     return {"ok": True}
+
+
+DEFAULT_TASK_CHECKLIST = [
+    {"label": "Meal preparation", "completed": False},
+    {"label": "Medication reminder", "completed": False},
+    {"label": "Mobility assistance", "completed": False},
+    {"label": "Light housekeeping", "completed": False},
+    {"label": "Companionship", "completed": False},
+]
+
+
+def _parse_checklist(raw: str):
+    try:
+        parsed = json.loads(raw or '[]')
+        return parsed if isinstance(parsed, list) else DEFAULT_TASK_CHECKLIST
+    except json.JSONDecodeError:
+        return DEFAULT_TASK_CHECKLIST
+
+
+def _visit_payload(db: Session, visit: Visit):
+    client = db.get(Client, visit.client_id)
+    caregiver = db.get(Caregiver, visit.caregiver_id)
+    return {
+        "id": visit.id,
+        "client_id": visit.client_id,
+        "caregiver_id": visit.caregiver_id,
+        "client_name": f"{client.first_name} {client.last_name}" if client else "Unknown Client",
+        "caregiver_name": f"{caregiver.first_name} {caregiver.last_name}" if caregiver else "Unknown Caregiver",
+        "scheduled_start": visit.scheduled_start.isoformat(),
+        "scheduled_end": visit.scheduled_end.isoformat(),
+        "status": visit.status,
+        "service_type": visit.service_type,
+        "address": client.address if client else "",
+        "city": client.city if client else "",
+        "checked_in_at": visit.checked_in_at.isoformat() if visit.checked_in_at else None,
+        "checked_out_at": visit.checked_out_at.isoformat() if visit.checked_out_at else None,
+        "check_in_location": visit.check_in_location,
+        "check_out_location": visit.check_out_location,
+        "mileage_start": visit.mileage_start,
+        "mileage_end": visit.mileage_end,
+        "mileage_total": visit.mileage_total,
+        "task_checklist": _parse_checklist(visit.task_checklist),
+        "caregiver_notes": visit.caregiver_notes,
+        "missed_alert_sent": visit.missed_alert_sent,
+    }
+
+
+@router.get('/caregiver/visits')
+def caregiver_visits(caregiver_id: int | None = Query(default=None), db: Session = Depends(get_db)):
+    query = db.query(Visit).order_by(Visit.scheduled_start.asc())
+    if caregiver_id:
+        query = query.filter(Visit.caregiver_id == caregiver_id)
+    visits = query.all()
+    return [_visit_payload(db, v) for v in visits]
+
+
+@router.get('/caregiver/visits/{visit_id}')
+def caregiver_visit_detail(visit_id: int, db: Session = Depends(get_db)):
+    visit = get_or_404(db, Visit, visit_id)
+    return _visit_payload(db, visit)
+
+
+@router.post('/caregiver/visits/{visit_id}/check-in')
+def caregiver_check_in(visit_id: int, payload: dict, db: Session = Depends(get_db)):
+    visit = get_or_404(db, Visit, visit_id)
+    if visit.status != 'scheduled':
+        raise HTTPException(status_code=400, detail='Visit cannot be checked in from current status')
+    visit.checked_in_at = datetime.utcnow()
+    visit.status = 'in_progress'
+    visit.check_in_location = payload.get('location')
+    db.commit(); db.refresh(visit)
+    return _visit_payload(db, visit)
+
+
+@router.post('/caregiver/visits/{visit_id}/check-out')
+def caregiver_check_out(visit_id: int, payload: dict, db: Session = Depends(get_db)):
+    visit = get_or_404(db, Visit, visit_id)
+    if not visit.checked_in_at:
+        raise HTTPException(status_code=400, detail='Visit must be checked in before checking out')
+    visit.checked_out_at = datetime.utcnow()
+    visit.status = 'completed'
+    visit.check_out_location = payload.get('location')
+    if visit.mileage_start is not None and visit.mileage_end is not None:
+        visit.mileage_total = max(0, visit.mileage_end - visit.mileage_start)
+    db.commit(); db.refresh(visit)
+    return _visit_payload(db, visit)
+
+
+@router.post('/caregiver/visits/{visit_id}/notes')
+def caregiver_notes(visit_id: int, payload: dict, db: Session = Depends(get_db)):
+    visit = get_or_404(db, Visit, visit_id)
+    visit.caregiver_notes = payload.get('caregiver_notes', '')
+    db.commit(); db.refresh(visit)
+    return _visit_payload(db, visit)
+
+
+@router.put('/caregiver/visits/{visit_id}/tasks')
+def caregiver_tasks(visit_id: int, payload: dict, db: Session = Depends(get_db)):
+    visit = get_or_404(db, Visit, visit_id)
+    tasks = payload.get('task_checklist', DEFAULT_TASK_CHECKLIST)
+    visit.task_checklist = json.dumps(tasks)
+    db.commit(); db.refresh(visit)
+    return _visit_payload(db, visit)
+
+
+@router.put('/caregiver/visits/{visit_id}/mileage')
+def caregiver_mileage(visit_id: int, payload: dict, db: Session = Depends(get_db)):
+    visit = get_or_404(db, Visit, visit_id)
+    visit.mileage_start = payload.get('mileage_start')
+    visit.mileage_end = payload.get('mileage_end')
+    if visit.mileage_start is not None and visit.mileage_end is not None:
+        visit.mileage_total = max(0, visit.mileage_end - visit.mileage_start)
+    db.commit(); db.refresh(visit)
+    return _visit_payload(db, visit)
+
+
+@router.get('/caregiver/alerts/missed-check-ins')
+def missed_checkins(caregiver_id: int | None = Query(default=None), db: Session = Depends(get_db)):
+    query = db.query(Visit).filter(Visit.status == 'scheduled', Visit.scheduled_start < datetime.utcnow(), Visit.checked_in_at.is_(None))
+    if caregiver_id:
+        query = query.filter(Visit.caregiver_id == caregiver_id)
+    visits = query.all()
+    return {"count": len(visits), "visits": [_visit_payload(db, v) for v in visits]}
