@@ -1,9 +1,10 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Literal
 
 from pydantic import BaseModel
 
 VisitStatus = Literal["scheduled", "in_progress", "completed", "missed"]
+RecurrenceRule = Literal["daily", "weekly", "biweekly", "monthly"]
 
 
 class ClientBase(BaseModel):
@@ -103,6 +104,10 @@ class VisitBase(BaseModel):
     status: VisitStatus = "scheduled"
     service_type: str = ""
     notes: str = ""
+    recurrence_group_id: str | None = None
+    recurrence_rule: str | None = None
+    recurrence_end_date: date | None = None
+    generated_from_recurring: bool = False
 
 
 class VisitCreate(VisitBase):
@@ -115,6 +120,42 @@ class VisitUpdate(VisitBase):
 
 class VisitRead(VisitBase):
     id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class VisitMove(BaseModel):
+    scheduled_start: datetime
+    scheduled_end: datetime
+
+
+class RecurringVisitCreate(VisitBase):
+    recurrence_rule: RecurrenceRule
+    recurrence_end_date: date
+
+
+class CaregiverAvailabilityBase(BaseModel):
+    day_of_week: int
+    available: bool = True
+    start_time: time | None = None
+    end_time: time | None = None
+    notes: str = ""
+
+
+class CaregiverAvailabilityCreate(CaregiverAvailabilityBase):
+    pass
+
+
+class CaregiverAvailabilityUpdate(CaregiverAvailabilityBase):
+    pass
+
+
+class CaregiverAvailabilityRead(CaregiverAvailabilityBase):
+    id: int
+    caregiver_id: int
     created_at: datetime
     updated_at: datetime
 

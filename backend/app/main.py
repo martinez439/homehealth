@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import OperationalError
 
 from app.api.routes.crud import router as api_router
@@ -21,6 +22,26 @@ def _handle_sqlite_schema_mismatch(error: Exception) -> None:
     ) from error
 
 
+def _ensure_sqlite_phase4_schema() -> None:
+    """Apply additive SQLite-only dev columns so older local DBs keep starting."""
+    if not (is_dev_mode() and is_sqlite_url(DATABASE_URL)):
+        return
+    inspector = inspect(engine)
+    if "visits" not in inspector.get_table_names():
+        return
+    visit_columns = {column["name"] for column in inspector.get_columns("visits")}
+    additions = {
+        "recurrence_group_id": "ALTER TABLE visits ADD COLUMN recurrence_group_id VARCHAR(80)",
+        "recurrence_rule": "ALTER TABLE visits ADD COLUMN recurrence_rule VARCHAR(40)",
+        "recurrence_end_date": "ALTER TABLE visits ADD COLUMN recurrence_end_date DATE",
+        "generated_from_recurring": "ALTER TABLE visits ADD COLUMN generated_from_recurring BOOLEAN DEFAULT 0",
+    }
+    with engine.begin() as conn:
+        for column_name, statement in additions.items():
+            if column_name not in visit_columns:
+                conn.execute(text(statement))
+
+
 def initialize_database():
     """
     Create schema on startup and seed demo data when needed.
@@ -29,6 +50,7 @@ def initialize_database():
     """
     try:
         Base.metadata.create_all(bind=engine)
+        _ensure_sqlite_phase4_schema()
         seed_demo_data()
     except OperationalError as exc:
         if is_dev_mode() and is_sqlite_url(DATABASE_URL):
