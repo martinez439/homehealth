@@ -1,17 +1,21 @@
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-export async function apiGet(path) {
-  const res = await fetch(`${API_URL}${path}`);
-  if (!res.ok) throw new Error(`GET ${path} failed`);
+async function request(path, options = {}) {
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    ...options,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `${options.method || 'GET'} ${path} failed`);
+  }
+
+  if (res.status === 204) return null;
   return res.json();
 }
 
-export async function apiPost(path, body) {
-  const res = await fetch(`${API_URL}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`POST ${path} failed`);
-  return res.json();
-}
+export const apiGet = (path) => request(path);
+export const apiPost = (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) });
+export const apiPut = (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) });
+export const apiDelete = (path) => request(path, { method: 'DELETE' });

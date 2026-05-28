@@ -1,32 +1,33 @@
-import { useState } from 'react';
-import { apiPost } from '../../api/client';
+import { useEffect, useState } from 'react';
+import { apiGet, apiPost, apiPut } from '../../api/client';
 import { Card, PageHeader } from '../../components/UI';
 
-export default function IntakePage() {
-  const [status, setStatus] = useState('');
-  async function submit(e) {
-    e.preventDefault();
-    const data = Object.fromEntries(new FormData(e.currentTarget).entries());
-    await apiPost('/api/intake', data);
-    setStatus('Draft saved and intake submitted successfully.');
-  }
+const initial = { client_name: '', phone: '', email: '', city: '', care_needs: '', preferred_schedule: '', urgency: 'normal', status: 'new', notes: '' };
 
-  return (
-    <>
-      <PageHeader title="Client Intake" subtitle="Step 1 of 5 • Compassionate onboarding for families and clients." />
-      <Card warm>
-        <form onSubmit={submit} className="form-grid">
-          <input name="client_name" placeholder="Client Full Name" required />
-          <input name="phone" placeholder="Preferred Phone" />
-          <select name="care_level" defaultValue="">
-            <option value="" disabled>Care needs level</option><option>Companion</option><option>Personal Care</option><option>Skilled Nursing</option>
-          </select>
-          <textarea name="care_needs" placeholder="Care needs, routines, and preferences" rows={5} />
-          <textarea name="emergency_contacts" placeholder="Emergency contacts" rows={3} />
-          <div className="actions"><button className="btn" type="submit">Save & Continue</button></div>
-          {status && <p>{status}</p>}
-        </form>
-      </Card>
-    </>
-  );
+export default function IntakePage() {
+  const [form, setForm] = useState(initial); const [status, setStatus] = useState(''); const [requests, setRequests] = useState([]); const [editId, setEditId] = useState(null);
+  const load = () => apiGet('/api/intake').then(setRequests);
+  useEffect(() => { load(); }, []);
+  const submit = async (e) => {
+    e.preventDefault();
+    editId ? await apiPut(`/api/intake/${editId}`, form) : await apiPost('/api/intake', form);
+    setStatus('Intake submitted successfully.'); setForm(initial); setEditId(null); load();
+  };
+
+  return <>
+    <PageHeader title="Client Intake" subtitle="Step 1 of 5 • Compassionate onboarding for families and clients." />
+    <Card warm>
+      <form onSubmit={submit} className="form-grid">
+        <input value={form.client_name} onChange={(e) => setForm({ ...form, client_name: e.target.value })} placeholder="Client Full Name" required />
+        <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="Preferred Phone" />
+        <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email (optional)" />
+        <input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="City" />
+        <textarea value={form.care_needs} onChange={(e) => setForm({ ...form, care_needs: e.target.value })} placeholder="Care needs" rows={4} />
+        <input value={form.preferred_schedule} onChange={(e) => setForm({ ...form, preferred_schedule: e.target.value })} placeholder="Preferred schedule" />
+        <div className="actions"><button className="btn" type="submit">{editId ? 'Update' : 'Submit'} Intake</button></div>
+        {status && <p>{status}</p>}
+      </form>
+    </Card>
+    <Card title='Recent Intake Requests'>{requests.map((r) => <p key={r.id}><button className='btn' onClick={() => { setForm(r); setEditId(r.id); }}>Edit</button> {r.client_name} — {r.status}</p>)}</Card>
+  </>;
 }
