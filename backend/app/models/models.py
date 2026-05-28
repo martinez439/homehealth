@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, String, Text
@@ -17,9 +19,9 @@ class Client(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     first_name: Mapped[str] = mapped_column(String(100))
     last_name: Mapped[str] = mapped_column(String(100))
-    date_of_birth: Mapped[datetime | None] = mapped_column(Date, nullable=True)
+    date_of_birth: Mapped[datetime] = mapped_column(Date, nullable=True)
     phone: Mapped[str] = mapped_column(String(40))
-    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=True)
     address: Mapped[str] = mapped_column(String(255), default="")
     city: Mapped[str] = mapped_column(String(120), default="")
     state: Mapped[str] = mapped_column(String(50), default="")
@@ -49,7 +51,7 @@ class IntakeRequest(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     client_name: Mapped[str] = mapped_column(String(255))
     phone: Mapped[str] = mapped_column(String(40), default="")
-    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=True)
     city: Mapped[str] = mapped_column(String(120), default="")
     care_needs: Mapped[str] = mapped_column(Text, default="")
     preferred_schedule: Mapped[str] = mapped_column(String(120), default="")
@@ -69,13 +71,40 @@ class Visit(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(40), default="scheduled")
     service_type: Mapped[str] = mapped_column(String(120), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
-    checked_in_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    checked_out_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    check_in_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    check_out_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    mileage_start: Mapped[float | None] = mapped_column(Float, nullable=True)
-    mileage_end: Mapped[float | None] = mapped_column(Float, nullable=True)
-    mileage_total: Mapped[float | None] = mapped_column(Float, nullable=True)
+    checked_in_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    checked_out_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    check_in_location: Mapped[str] = mapped_column(String(255), nullable=True)
+    check_out_location: Mapped[str] = mapped_column(String(255), nullable=True)
+    mileage_start: Mapped[float] = mapped_column(Float, nullable=True)
+    mileage_end: Mapped[float] = mapped_column(Float, nullable=True)
+    mileage_total: Mapped[float] = mapped_column(Float, nullable=True)
     task_checklist: Mapped[str] = mapped_column(Text, default="[]")
     caregiver_notes: Mapped[str] = mapped_column(Text, default="")
     missed_alert_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class FamilyContact(TimestampMixin, Base):
+    __tablename__ = "family_contacts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"))
+    first_name: Mapped[str] = mapped_column(String(100))
+    last_name: Mapped[str] = mapped_column(String(100))
+    relationship: Mapped[str] = mapped_column(String(100), default="")
+    phone: Mapped[str] = mapped_column(String(40), default="")
+    email: Mapped[str] = mapped_column(String(255), default="")
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    receives_updates: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class FamilyMessage(TimestampMixin, Base):
+    __tablename__ = "family_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"))
+    sender_name: Mapped[str] = mapped_column(String(200))
+    sender_email: Mapped[str] = mapped_column(String(255), nullable=True)
+    message_type: Mapped[str] = mapped_column(String(60), default="general_question")
+    subject: Mapped[str] = mapped_column(String(255), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(40), default="new")

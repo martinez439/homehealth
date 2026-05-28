@@ -120,3 +120,67 @@ class VisitRead(VisitBase):
 
     class Config:
         from_attributes = True
+
+FamilyMessageType = Literal[
+    "general_question",
+    "schedule_request",
+    "care_update_request",
+    "billing_question",
+    "other",
+]
+FamilyMessageStatus = Literal["new", "reviewed", "resolved"]
+
+
+class FamilyContactBase(BaseModel):
+    first_name: str
+    last_name: str
+    relationship: str = ""
+    phone: str = ""
+    email: str = ""
+    is_primary: bool = False
+    receives_updates: bool = True
+
+
+class FamilyContactCreate(FamilyContactBase):
+    pass
+
+
+class FamilyContactUpdate(FamilyContactBase):
+    pass
+
+
+class FamilyContactRead(FamilyContactBase):
+    id: int
+    client_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class FamilyMessageBase(BaseModel):
+    sender_name: str
+    sender_email: str | None = None
+    message_type: FamilyMessageType = "general_question"
+    subject: str
+    message: str
+
+
+class FamilyMessageCreate(FamilyMessageBase):
+    pass
+
+
+class FamilyMessageUpdate(FamilyMessageBase):
+    status: FamilyMessageStatus = "new"
+
+
+class FamilyMessageRead(FamilyMessageBase):
+    id: int
+    client_id: int
+    status: FamilyMessageStatus
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
