@@ -18,7 +18,10 @@ jobs:
         with: { node-version: '22' }
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm install
+        run: npm ci
+      - name: Fix npm binary permissions
+        working-directory: frontend
+        run: chmod -R +x node_modules/.bin
       - name: Build frontend
         working-directory: frontend
         run: npm run build
