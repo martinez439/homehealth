@@ -9,6 +9,7 @@ import CaregiverPage from './pages/caregiver/CaregiverPage';
 import VisitDetailsPage from './pages/caregiver/VisitDetailsPage';
 import FamilyViewPage from './pages/family/FamilyViewPage';
 import LoginPage from './pages/LoginPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import ForbiddenPage from './pages/ForbiddenPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import AdminAuditLogsPage from './pages/admin/AdminAuditLogsPage';
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/" element={<Navigate to="/intake" replace />} />
         <Route path="/intake" element={<IntakePage />} />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/forbidden" element={<ForbiddenPage />} />
         <Route path="/admin" element={<ProtectedRoute roles={['admin']}><AdminDashboardPage /></ProtectedRoute>} />
         <Route path="/admin/clients" element={<ProtectedRoute roles={['admin']}><AdminClientsPage /></ProtectedRoute>} />
